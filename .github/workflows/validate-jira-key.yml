@@ -5,7 +5,7 @@ on:
 
 jobs:
   call:
-    uses: zeebra-profect.github/.github/workflows/validate-jira-key-on-issue.yml@main
+    uses: zeebra-profect/.github/.github/workflows/validate-jira-key-on-issue.yml@main
     with:
       jira_key_prefix: ZBR
     secrets: inherit
