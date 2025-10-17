@@ -1,0 +1,22 @@
+name: Create branch (slash command)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  call-create-branch:
+    if: |
+      contains(github.event.comment.body, '/branch') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER')
+    uses: zeebra-profect/.github/.github/workflows/issue-create-branch.yml@main
+    with:
+      allowed_branch_types: feature,hotfix,release
+      base_ref: develop
+      jira_key_prefix: ZBR
+    secrets: inherit

@@ -1,0 +1,179 @@
+name: issue-create-branch
+
+on:
+  workflow_call:
+    inputs:
+      allowed_branch_types:
+        description: '허용 타입'
+        required: false
+        default: 'feature,hotfix,release'
+        type: string
+      base_ref:
+        description: '브랜치 생성 기준 브랜치 (예: develop, main)'
+        required: false
+        default: 'develop'
+        type: string
+      jira_key_prefix:
+        description: 'Jira Key Prefix'
+        required: true
+        type: string
+    secrets:
+      JIRA_BASE_URL: {required: true}
+      JIRA_USER_EMAIL: {required: true}
+      JIRA_API_TOKEN: {required: true}
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  create_branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse issue
+        id: parse
+        run: |
+          python3 - << 'PY'
+          import os, json, re
+          with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as f:
+              ev = json.load(f)
+          body = (ev.get("issue", {}) or {}).get("body") or ""
+
+          def grab(label: str) -> str:
+              import re
+              p = re.compile(rf"\*{{2}}{re.escape(label)}\*{{2}}\s*\n+([\s\S]*?)(?=\n\*{{2}}.+?\*{{2}}\s*\n|\Z)")
+              m = p.search(body)
+              return (m.group(1).strip() if m else "").strip()
+
+          branch_type = (grab("Branch Type").splitlines() or [""])[0].strip().lower()
+          branch_name = (grab("Branch Name").splitlines() or [""])[0].strip().lower()
+
+          m = re.search(r"[A-Z]+-\d+", (grab("Jira Ticket Number") or body))
+          jira_key = m.group(0).strip() if m else ""
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"type={branch_type}\n")
+              out.write(f"branch={branch_name}\n")
+              out.write(f"jira={jira_key}\n")
+          PY
+        
+      - name: Validate values
+        id: val
+        run: |
+          TYPE="${{ steps.parse.outputs.type }}"
+          NAME="${{ steps.parse.outputs.branch }}"
+          KEY="${{ steps.parse.outputs.jira }}"
+          PREFIX="${{ inputs.jira_key_prefix }}"        
+          ALLOWED="$(echo '${{ inputs.allowed_branch_types }}' | tr ',' '|' | tr -d ' ')"
+
+          ERR=""
+          echo "$TYPE" | grep -Eq "^($ALLOWED)$" || ERR="$ERR\n- 브랜치 타입은 다음 중에 하나여야 합니다.: ${{ inputs.allowed_branch_types }}"
+          echo "$NAME" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$' || ERR="$ERR\n- 브랜치 이름은 케밥 케이스로 작성되어야 합니다."
+          if [ -n "$PREFIX" ]; then
+            echo "$KEY" | grep -Eq "^${PREFIX}-[0-9]+$" || ERR="$ERR\n- Jira 키 형식: ${PREFIX}-123"
+          else
+            echo "$KEY"  | grep -Eq '^[A-Z]+-[0-9]+$' || ERR="$ERR\n- Jira 키를 포함해야합니다.(e.g., ZBR-123)"
+          fi
+
+
+          if [ -n "$ERR" ]; then
+            echo -e "fail=$ERR" >> $GITHUB_OUTPUT
+            echo "ok=false"     >> $GITHUB_OUTPUT
+          else
+            echo "ok=true"      >> $GITHUB_OUTPUT
+          fi
+
+
+      - name: Jira login
+        if: steps.val.outputs.ok == 'true'
+        uses: atlassian/gajira-login@v3
+        env:
+          JIRA_BASE_URL:   ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN:  ${{ secrets.JIRA_API_TOKEN }}
+
+      - name: Validate Jira existence
+        id: valid_key
+        if: steps.val.outputs.ok == 'true'
+        run: |
+          KEY="${{ steps.parse.outputs.jira }}"
+          RES=$(curl -s -H "$JIRA_AUTH_HEADER" "$JIRA_API_URL/issue/$KEY")
+          if echo "$RES" | jq -e .key >/dev/null 2>&1; then
+            STATUS=$(echo "$RES" | jq -r .fields.status.name)
+            echo "jira_ok=true"       >> $GITHUB_OUTPUT
+            echo "jira_status=$STATUS" >> $GITHUB_OUTPUT
+          else
+            echo "jira_ok=false"      >> $GITHUB_OUTPUT
+            echo "jira_msg=- Jira에 존재하지 않거나 권한이 없습니다: $KEY" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Short-circuit on failures
+        if: |
+          steps.val.outputs.ok != 'true' || steps.valid_key.outputs.jira_ok != 'true'
+        run: |
+          MSG="브랜치 생성 불가:\n"
+          if [ "${{ steps.val.outputs.ok }}" != "true" ]; then
+            MSG="$MSG${{ steps.val.outputs.fail }}\n"
+          fi
+          if [ "${{ steps.valid_key.outputs.jira_ok }}" != "true" ]; then
+            MSG="$MSG${{ steps.valid_key.outputs.jira_msg }}\n"
+          fi
+          gh issue comment ${{ github.event.issue.number }} --body "$MSG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: false 
+
+      - name: Compute ref
+        id: ref
+        run: |
+          echo "ref=${{ steps.parse.outputs.type }}/${{ steps.parse.outputs.jira }}-${{ steps.parse.outputs.branch }}" >> $GITHUB_OUTPUT
+
+      - name: Check if branch already exists
+        id: exist
+        run: |
+          HAS=$(gh api repos/${{ github.repository }}/git/matching-refs/heads/${{ steps.ref.outputs.ref }} 2>/dev/null | jq 'length' || echo 0)
+          echo "has=$HAS" >> $GITHUB_OUTPUT
+        env:   
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+
+      - name: Comment if exists
+        if: steps.exist.outputs.has != '0'
+        run: |
+          BR="${{ steps.ref.outputs.ref }}"
+          gh issue comment ${{ github.event.issue.number }} --body $'동일한 브랜치가 이미 존재합니다: `'"$BR"'`\n\n**로컬에서 바로 작업 시작**\n```bash\ngit fetch origin\ngit switch '"$BR"' || git checkout -b '"$BR"' origin/'"$BR"'\n```'
+        env: 
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+
+      - name: Checkout base code
+        if: steps.exist.outputs.has == '0'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_ref }}
+          fetch-depth: 0
+
+      - name: Create branch 
+        if: steps.exist.outputs.has == '0'
+        run: |
+          BRANCH_NAME="${{ steps.ref.outputs.ref }}"
+          git checkout -b "${BRANCH_NAME}"
+          git push origin "${BRANCH_NAME}"
+
+      - name: Comment validation failure
+        if: steps.val.outputs.ok != 'true'
+        run: |
+          gh issue comment ${{ github.event.issue.number }} --body $'브랜치 생성 불가:\n${{ steps.val.outputs.fail }}\n\n**규칙**\n- 형식: `type/JIRA-KEY-kebab`\n- 예: `feature/ZBR-123-checkout-webhook`'
+        env: 
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment success
+        if: steps.exist.outputs.has == '0'
+        run: |
+          BR="${{ steps.ref.outputs.ref }}"
+          EXTRA=""
+          if [ -n "${{ steps.valid_key.outputs.jira_status }}" ]; then
+            EXTRA=" (Jira: ${{ steps.valid_key.outputs.jira_status }})"
+          fi
+          gh issue edit ${{ github.event.issue.number }} --add-label "${{ inputs.created_label }}" || true
+          gh issue comment ${{ github.event.issue.number }} --body $'브랜치 생성: `'"$BR"'`\n\n**로컬로 가져오기**\n```bash\ngit fetch origin\ngit switch -c '"$BR"' --track origin/'"$BR"' || git checkout -b '"$BR"' origin/'"$BR"'\n```'
+        env: 
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
