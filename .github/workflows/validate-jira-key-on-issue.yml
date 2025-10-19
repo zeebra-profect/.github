@@ -18,6 +18,13 @@ permissions:
 jobs: 
   validate:
     runs-on: ubuntu-latest
+
+    env:
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      JIRA_API_URL: ${{ secrets.JIRA_BASE_URL }}/rest/api/3
+
     steps:
 
       - name: Login to Jira
