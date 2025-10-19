@@ -87,14 +87,14 @@ jobs:
           if [ "${{ steps.exist.outputs.ok }}" != "true" ]; then
             MSG="$MSG${{ steps.exist.outputs.msg }}\n"
           fi
-          gh issue comment ${{ github.event.issue.number }} --body "$MSG"
+          gh issue comment ${{ github.event.issue.number }} --repo "$GITHUB_REPOSITORY" --body "$MSG"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ack on success
         if: steps.format.outputs.ok == 'true' && steps.exist.outputs.ok == 'true'
         run: |
-          gh issue comment ${{ github.event.issue.number }} --body "Jira 키 확인 완료: \`${{ steps.parse.outputs.jira }}\`"
+          gh issue comment ${{ github.event.issue.number }} --repo "$GITHUB_REPOSITORY" --body "Jira 키 확인 완료: \`${{ steps.parse.outputs.jira }}\`"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
