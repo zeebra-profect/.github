@@ -114,7 +114,34 @@ jobs:
         run: |
           KEY="${{ steps.parse.outputs.jira }}"
           LINK="${{ env.JIRA_BASE_URL }}/browse/${KEY}"
+          GH_ISSUE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/issues/${{ github.event.issue.number }}"
+          GH_ISSUE_NUM="#${{ github.event.issue.number }}"
+      
           gh issue comment ${{ github.event.issue.number }} --repo "$GITHUB_REPOSITORY" --body "Jira 키 확인 완료: [${KEY}](${LINK})"
+          
+          AUTH_B64="$(printf '%s:%s' "$JIRA_USER_EMAIL" "$JIRA_API_TOKEN" | base64 | tr -d '\n')"
+          JIRA_AUTH_HEADER="Authorization: Basic ${AUTH_B64}"
+
+          PAYLOAD="$(jq -n --arg url "$GH_ISSUE_URL" --arg num "$GH_ISSUE_NUM" '{
+            body: {
+              type: "doc", version: 1,
+              content: [
+                { type: "paragraph", content: [
+                    { type: "text", text: "GitHub 이슈 연결: " },
+                    { type: "text", text: $num, marks: [ { type: "link", attrs: { href: $url } } ] }
+                ]}
+              ]
+            }
+          }')"
+
+          curl -sS -f --retry 2 \
+            -H "$JIRA_AUTH_HEADER" \
+            -H 'Content-Type: application/json' \
+            --data "$PAYLOAD" \
+            "$JIRA_API_URL/issue/${KEY}/comment" >/dev/null
+
+          echo "Jira ${KEY}에 GitHub 이슈 링크 코멘트 추가 완료"
+
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
