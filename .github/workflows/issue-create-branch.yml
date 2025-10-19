@@ -199,9 +199,16 @@ jobs:
             EXTRA=" (Jira: ${{ steps.valid_key.outputs.jira_status }})"
           fi
 
-          BODY=$'브랜치 생성: `'"$BR"'`'"$EXTRA"'\n\n**로컬로 가져오기**\n```bash\ngit fetch origin\ngit switch -c '"$BR"' --track origin/'"$BR"' || git checkout -b '"$BR"' origin/'"$BR"'\n```'
+          BODY=$(cat <<EOF
+브랜치 생성: \`$BR\`$EXTRA
 
-          gh issue comment ${{ github.event.issue.number }} --repo "$GITHUB_REPOSITORY" --body "$BODY"
+**로컬로 가져오기**
+\`\`\`bash
+git fetch origin
+git switch -c $BR --track origin/$BR || git checkout -b $BR origin/$BR
+\`\`\`
+EOF
+)
 
         env: 
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
