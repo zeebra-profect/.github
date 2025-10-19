@@ -45,18 +45,26 @@ jobs:
           with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as f:
               ev = json.load(f)
           body = (ev.get("issue", {}) or {}).get("body") or ""
+          
+          def grab_from_header(label: str) -> str:
+              pat = re.compile(rf"^###\s*{re.escape(label)}\s*$([\s\S]*?)(?=^###\s*|\Z)", re.MULTILINE)
+              m = pat.search(body)
+              if not m:
+                  return ""
+              block = m.group(1)
+              for line in block.splitlines():
+                  line = line.strip()
+                  if line:
+                      return line
+              return ""
 
-          def grab(label: str) -> str:
-              import re
-              p = re.compile(rf"\*{{2}}{re.escape(label)}\*{{2}}\s*\n+([\s\S]*?)(?=\n\*{{2}}.+?\*{{2}}\s*\n|\Z)")
-              m = p.search(body)
-              return (m.group(1).strip() if m else "").strip()
+          branch_type = grab_from_header("Branch Type").strip().lower()
+          branch_name = grab_from_header("Branch Name").strip().lower()
 
-          branch_type = (grab("Branch Type").splitlines() or [""])[0].strip().lower()
-          branch_name = (grab("Branch Name").splitlines() or [""])[0].strip().lower()
-
-          m = re.search(r"[A-Z]+-\d+", (grab("Jira Ticket Number") or body))
-          jira_key = m.group(0).strip() if m else ""
+          jira_key = grab_from_header("Jira Ticket Number").strip()
+          if not jira_key:
+              m = re.search(r"[A-Z]+-\d+", body)
+              jira_key = m.group(0) if m else ""
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"type={branch_type}\n")
@@ -67,6 +75,7 @@ jobs:
       - name: Validate values
         id: val
         run: |
+          set -Eeuo pipefail
           TYPE="${{ steps.parse.outputs.type }}"
           NAME="${{ steps.parse.outputs.branch }}"
           KEY="${{ steps.parse.outputs.jira }}"
@@ -84,6 +93,7 @@ jobs:
 
 
           if [ -n "$ERR" ]; then
+            ERR="${ERR#\\n}"
             echo -e "fail=$ERR" >> $GITHUB_OUTPUT
             echo "ok=false"     >> $GITHUB_OUTPUT
           else
@@ -104,6 +114,7 @@ jobs:
         id: valid_key
         if: steps.val.outputs.ok == 'true'
         run: |
+          set -Eeuo pipefail
           KEY="${{ steps.parse.outputs.jira }}"
           JIRA_AUTH_HEADER="Authorization: Basic $(printf '%s:%s' "$JIRA_USER_EMAIL" "$JIRA_API_TOKEN" | base64 | tr -d '\n')"
           RES=$(curl -s -H "$JIRA_AUTH_HEADER" "$JIRA_API_URL/issue/$KEY")
@@ -135,6 +146,7 @@ jobs:
       - name: Compute ref
         id: ref
         run: |
+          set -Eeuo pipefail
           echo "ref=${{ steps.parse.outputs.type }}/${{ steps.parse.outputs.jira }}-${{ steps.parse.outputs.branch }}" >> $GITHUB_OUTPUT
 
       - name: Check if branch already exists
@@ -148,6 +160,7 @@ jobs:
       - name: Comment if exists
         if: steps.exist.outputs.has != '0'
         run: |
+          set -Eeuo pipefail
           BR="${{ steps.ref.outputs.ref }}"
           gh issue comment ${{ github.event.issue.number }} --repo "$GITHUB_REPOSITORY" --body $'동일한 브랜치가 이미 존재합니다: `'"$BR"'`\n\n**로컬에서 바로 작업 시작**\n```bash\ngit fetch origin\ngit switch '"$BR"' || git checkout -b '"$BR"' origin/'"$BR"'\n```'
         env: 
@@ -163,6 +176,7 @@ jobs:
       - name: Create branch 
         if: steps.exist.outputs.has == '0'
         run: |
+          set -Eeuo pipefail
           BRANCH_NAME="${{ steps.ref.outputs.ref }}"
           git checkout -b "${BRANCH_NAME}"
           git push origin "${BRANCH_NAME}"
@@ -170,6 +184,7 @@ jobs:
       - name: Comment validation failure
         if: steps.val.outputs.ok != 'true'
         run: |
+          set -Eeuo pipefail
           gh issue comment ${{ github.event.issue.number }} --repo "$GITHUB_REPOSITORY" --body $'브랜치 생성 불가:\n${{ steps.val.outputs.fail }}\n\n**규칙**\n- 형식: `type/JIRA-KEY-kebab`\n- 예: `feature/ZBR-123-checkout-webhook`'
         env: 
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -177,6 +192,7 @@ jobs:
       - name: Comment success
         if: steps.exist.outputs.has == '0'
         run: |
+          set -Eeuo pipefail
           BR="${{ steps.ref.outputs.ref }}"
           EXTRA=""
           if [ -n "${{ steps.valid_key.outputs.jira_status }}" ]; then
