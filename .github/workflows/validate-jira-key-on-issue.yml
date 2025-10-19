@@ -42,16 +42,20 @@ jobs:
           import os, json, re
           with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as f: 
               ev = json.load(f)
-          body = (ev.get("issue", {}) or "").get("body") or ""
+          issue = ev.get("issue") or {}
+          title = issue.get("title") or ""
+          body = issue.get("body") or ""
           m = re.search(r"[A-Z]+-\d+", body)
           key = m.group(0).strip() if m else ""
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"jira={key}\n")
+              out.write(f"title={title}\n")
           PY
 
       - name: Validate format
         id: format
         run: |
+          set -Eeuo pipefail
           KEY="${{ steps.parse.outputs.jira }}"
           PREFIX="${{ inputs.jira_key_prefix }}"
           if echo "$KEY" | grep -Eq "^${PREFIX}-[0-9]+$"; then
@@ -65,6 +69,7 @@ jobs:
         id: exist 
         if: steps.format.outputs.ok == 'true'
         run: |
+          set -Eeuo pipefail
           KEY="${{ steps.parse.outputs.jira }}"
           JIRA_AUTH_HEADER="Authorization: Basic $(printf '%s:%s' "$JIRA_USER_EMAIL" "$JIRA_API_TOKEN" | base64 | tr -d '\n')"
           RES=$(curl -s -H "$JIRA_AUTH_HEADER" "$JIRA_API_URL/issue/$KEY")
@@ -77,10 +82,23 @@ jobs:
             echo "msg=- Jira에 존재하지 않는 키이거나 권한이 없습니다: $KEY" >> $GITHUB_OUTPUT
           fi
 
+
+      - name: Detect existing key in title
+        id: title
+        run: |
+          set -Eeuo pipefail
+          KEY="${{ steps.parse.outputs.jira }}"
+          TITLE="${{ steps.parse.outputs.title }}"
+          if echo "$TITLE" | grep -Eq "(^|\[|\(|\s)${KEY}(\]|\\)|\s|$)"; then
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Comment on failure
         if: steps.format.outputs.ok != 'true' || steps.exist.outputs.ok != 'true'
         run: |
-          MSG: "Jira 키 검증 실패:\n"
+          MSG="Jira 키 검증 실패:\n"
           if [ "${{ steps.format.outputs.ok }}" != "true" ]; then
             MSG="$MSG${{ steps.format.outputs.msg }}\n"
           fi
@@ -92,14 +110,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ack on success
-        if: steps.format.outputs.ok == 'true' && steps.exist.outputs.ok == 'true'
+        if: steps.format.outputs.ok == 'true' && steps.exist.outputs.ok == 'true' && steps.title.outputs.has != 'true'
         run: |
-          gh issue comment ${{ github.event.issue.number }} --repo "$GITHUB_REPOSITORY" --body "Jira 키 확인 완료: \`${{ steps.parse.outputs.jira }}\`"
+          KEY="${{ steps.parse.outputs.jira }}"
+          LINK="${{ env.JIRA_BASE_URL }}/browse/${KEY}"
+          gh issue comment ${{ github.event.issue.number }} --repo "$GITHUB_REPOSITORY" --body "Jira 키 확인 완료: [${KEY}](${LINK})"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update issue title
-        if: steps.format.outputs.ok == 'true' && steps.exist.outputs.ok == 'true'
+        if: steps.format.outputs.ok == 'true' && steps.exist.outputs.ok == 'true' && steps.title.outputs.has != 'true'
         uses: actions-cool/issues-helper@v3
         with:
           actions: "update-issue"
