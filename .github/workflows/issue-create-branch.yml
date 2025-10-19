@@ -198,9 +198,8 @@ jobs:
           if [ -n "${{ steps.valid_key.outputs.jira_status }}" ]; then
             EXTRA=" (Jira: ${{ steps.valid_key.outputs.jira_status }})"
           fi
-          
+
           BODY=$'브랜치 생성: `'"$BR"'`'"$EXTRA"'\n\n**로컬로 가져오기**\n```bash\ngit fetch origin\ngit switch -c '"$BR"' --track origin/'"$BR"' || git checkout -b '"$BR"' origin/'"$BR"'\n```'
-          )"
 
           gh issue comment ${{ github.event.issue.number }} --repo "$GITHUB_REPOSITORY" --body "$BODY"
 
