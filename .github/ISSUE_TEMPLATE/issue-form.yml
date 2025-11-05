@@ -12,6 +12,7 @@ body:
         - feature
         - hotfix
         - release
+        - test
     validations: 
       required: true
 
