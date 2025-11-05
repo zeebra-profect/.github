@@ -6,7 +6,7 @@ on:
       allowed_branch_types:
         description: '허용 타입'
         required: false
-        default: 'feature,hotfix,release'
+        default: 'feature,hotfix,release,test'
         type: string
       base_ref:
         description: '브랜치 생성 기준 브랜치 (예: develop, main)'
